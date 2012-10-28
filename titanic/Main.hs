@@ -45,7 +45,8 @@ the definitions do not support such relations.
 import Text.CSV
 import Debug.Trace
 
-filename = "/home/jhibberd/projects/learning/titanic/train.csv"
+trainFilename = "/home/jhibberd/projects/learning/titanic/train.csv"
+testFilename = "/home/jhibberd/projects/learning/titanic/test.csv"
 data Field 
     = Survived 
     | Pclass 
@@ -67,11 +68,27 @@ initWeights = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 -- [4.599864e-2,0.0,-2.0080369,1.8113816e-2,-0.5271171,-0.11799717,0.0,1.6099315e-2,0.0,2.9998511e-2]
 
 main = do
-    parseResult <- parseCSVFromFile filename
+    parseResult <- parseCSVFromFile trainFilename
     let x = case parseResult of
                 Left a -> error "Can't read file"
                 Right a -> process $ stripHeadAndFoot a
-    return $ train initWeights x
+        learntWeights = train initWeights x
+
+    parseResultRaw <- parseCSVFromFile testFilename
+    let parseResult' = case parseResultRaw of
+                        Left a -> error "Boom"
+                        Right a -> init a
+
+    let cs = map (classify learntWeights) (process' . tail $ parseResult')
+        cs' = map (show . floor) cs
+    prependFile "test.csv" ("survived":cs')
+
+prependFile :: FilePath -> [String] -> IO ()
+prependFile fn xs = do
+    content <- readFile fn
+    let content' = lines content
+    let result = map (\(x, y) -> x ++ "," ++ y) $ zip xs content'
+    mapM_ putStrLn result
 
 -- | Remove headers from empty line from CSV file.
 stripHeadAndFoot :: [a] -> [a]
@@ -79,7 +96,9 @@ stripHeadAndFoot = tail . init
 
 process :: [[String]] -> [([Float], Float)]
 process xs = toTrainingSet $ map toVector xs
---where f x = x !! fromEnum Survived
+
+process' :: [[String]] -> [[Float]]
+process' xs = map toVector' xs
 
 toTrainingSet :: [[Float]] -> [([Float], Float)]
 toTrainingSet = map (\x -> (tail x, head x))
@@ -94,8 +113,7 @@ type Classification = Float
 
 train :: Weights -> TrainingSet -> Weights
 train ws xs = let (ws', errorSum) = iterate' ws xs 0
-                  errorSum' = traceShow errorSum errorSum
-              in if errorSum' / n <= threshold
+              in if errorSum / n <= threshold
                   then ws'
                   else train ws' xs
     where n = fromIntegral $ length xs
@@ -137,11 +155,28 @@ toVector xs = map (\(f, x) -> f x) $ zip converters xs
             , quantifyEmbarked
             ]
 
+toVector' :: [String] -> [Float]
+toVector' xs = map (\(f, x) -> f x) $ zip converters xs
+    where converters = 
+            [ quantifyPclass
+            , quantifyName
+            , quantifySex
+            , quantifyAge
+            , quantifySibsp
+            , quantifyParch
+            , quantifyTicket
+            , quantifyFare
+            , quantifyCabin
+            , quantifyEmbarked
+            ]
+
 quantifySurvived :: String -> Float
 quantifySurvived = read
 
 quantifyPclass :: String -> Float
-quantifyPclass = read
+quantifyPclass "1" = 1
+quantifyPclass "2" = 2
+quantifyPclass "3" = 3
 
 -- | Virtually impossible to quantify name into a meaninful number.
 quantifyName :: String -> Float
@@ -168,7 +203,8 @@ quantifyTicket :: String -> Float
 quantifyTicket x = 0
 
 quantifyFare :: String -> Float
-quantifyFare = read
+quantifyFare "" = 0
+quantifyFare x = read x
 
 -- | Ignore for now. See 'quantifyTicket'.
 quantifyCabin :: String -> Float
