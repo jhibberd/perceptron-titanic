@@ -1,87 +1,59 @@
--- | Attempt to read from the test case CSV file.
-
-{-
-VARIABLE DESCRIPTIONS:
-survival        Survival
-                (0 = No; 1 = Yes)
-pclass          Passenger Class
-                (1 = 1st; 2 = 2nd; 3 = 3rd)
-name            Name
-sex             Sex
-age             Age
-sibsp           Number of Siblings/Spouses Aboard
-parch           Number of Parents/Children Aboard
-ticket          Ticket Number
-fare            Passenger Fare
-cabin           Cabin
-embarked        Port of Embarkation
-                (C = Cherbourg; Q = Queenstown; S = Southampton)
-
-SPECIAL NOTES:
-Pclass is a proxy for socio-economic status (SES)
- 1st ~ Upper; 2nd ~ Middle; 3rd ~ Lower
-
-Age is in Years; Fractional if Age less than One (1)
- If the Age is Estimated, it is in the form xx.5
-
-With respect to the family relation variables (i.e. sibsp and parch)
-some relations were ignored.  The following are the definitions used
-for sibsp and parch.
-
-Sibling:  Brother, Sister, Stepbrother, or Stepsister of Passenger Aboard 
-          Titanic
-Spouse:   Husband or Wife of Passenger Aboard Titanic (Mistresses and Fiances 
-          Ignored)
-Parent:   Mother or Father of Passenger Aboard Titanic
-Child:    Son, Daughter, Stepson, or Stepdaughter of Passenger Aboard Titanic
-
-Other family relatives excluded from this study include cousins,
-nephews/nieces, aunts/uncles, and in-laws.  Some children travelled
-only with a nanny, therefore parch=0 for them.  As well, some
-travelled with very close friends or neighbors in a village, however,
-the definitions do not support such relations.
--}
 
 import Text.CSV
 import Debug.Trace
+import Data.List
 
-trainFilename = "/home/jhibberd/projects/learning/titanic/train.csv"
+trainingFilename = "/home/jhibberd/projects/learning/titanic/train.csv"
 testFilename = "/home/jhibberd/projects/learning/titanic/test.csv"
-data Field 
-    = Survived 
-    | Pclass 
-    | Name 
-    | Sex 
-    | Age 
-    | Sibsp 
-    | Parch 
-    | Ticket 
-    | Fare 
-    | Cabin 
-    | Embarked 
-    deriving (Enum)
 
-threshold = 0.27
+threshold = 0.3 --0.265
 bias = 0.5
-learningRate = 0.001
-initWeights = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
--- [4.599864e-2,0.0,-2.0080369,1.8113816e-2,-0.5271171,-0.11799717,0.0,1.6099315e-2,0.0,2.9998511e-2]
+learningRate = 0.0001
 
 main = do
-    parseResult <- parseCSVFromFile trainFilename
-    let x = case parseResult of
-                Left a -> error "Can't read file"
-                Right a -> process $ stripHeadAndFoot a
-        learntWeights = train initWeights x
 
-    parseResultRaw <- parseCSVFromFile testFilename
-    let parseResult' = case parseResultRaw of
-                        Left a -> error "Boom"
-                        Right a -> init a
+    -- Learn weights
+    trainingCSV <- parseCSVFromFile trainingFilename
+    let dataSet = getDataSet trainingCSV
+        trainingOutcomes = getOutcomesFromDataSet dataSet
+        trainingItems = getItemsFromDataSet dataSet
+        trainingSet = zip (vectoriseItems trainingItems) trainingOutcomes
+        learntWeights = train (initWeights trainingItems) trainingSet
 
-    let cs = map (classify learntWeights) (process' . tail $ parseResult')
+    let learntWeights' = traceShow learntWeights learntWeights
+
+    -- Apply learnt weights to test set
+    testCSV <- parseCSVFromFile testFilename
+    let testSet = getTestSet testCSV
+
+    let cs = map (classify learntWeights') (vectoriseItems testSet)
         cs' = map (show . floor) cs
-    prependFile "test.csv" ("survived":cs')
+    prependFile testFilename ("survived":cs')
+
+getOutcomesFromDataSet :: [[String]] -> [Float]
+getOutcomesFromDataSet = map (asBinary . head)
+    where asBinary "0" = 0
+          asBinary "1" = 1
+
+getItemsFromDataSet :: [[String]] -> [[String]]
+getItemsFromDataSet = map tail
+
+vectoriseItems :: [[String]] -> [[Float]]
+vectoriseItems = map toVector
+
+-- | Read the training file as a list of lists.
+getDataSet :: Either a [[String]] -> [[String]]
+getDataSet (Left a) = error "Can't read training file."
+getDataSet (Right a) = stripHeadAndFoot a
+
+-- | Read the test file as a list of lists.
+getTestSet :: Either a [[String]] -> [[String]]
+getTestSet (Left a) = error "Can't read test file."
+getTestSet (Right a) = tail $ init a
+
+-- | Return a list of equal size to the input vectors containing zeros.
+initWeights :: [[String]] -> Weights
+initWeights (v:_) = take (length $ toVector v) $ repeat 0.0
 
 prependFile :: FilePath -> [String] -> IO ()
 prependFile fn xs = do
@@ -94,15 +66,6 @@ prependFile fn xs = do
 stripHeadAndFoot :: [a] -> [a]
 stripHeadAndFoot = tail . init
 
-process :: [[String]] -> [([Float], Float)]
-process xs = toTrainingSet $ map toVector xs
-
-process' :: [[String]] -> [[Float]]
-process' xs = map toVector' xs
-
-toTrainingSet :: [[Float]] -> [([Float], Float)]
-toTrainingSet = map (\x -> (tail x, head x))
-
 type Weights = [Float]
 type Sample = (InputVector, Float)
 type TrainingSet = [Sample]
@@ -111,11 +74,13 @@ type Error = Float
 type ErrorSum = Float
 type Classification = Float
 
+-- | Perceptron algorithm ------------------------------------------------------
+
 train :: Weights -> TrainingSet -> Weights
 train ws xs = let (ws', errorSum) = iterate' ws xs 0
               in if errorSum / n <= threshold
                   then ws'
-                  else train ws' xs
+                  else train ws' (traceShow (errorSum / n)  xs)
     where n = fromIntegral $ length xs
 
 iterate' :: Weights -> TrainingSet -> ErrorSum -> (Weights, ErrorSum)
@@ -139,52 +104,39 @@ adjustWeights ws xs e = [w + (learningRate * e * x) | (w, x) <- zip ws xs]
 
 -- | To vector -----------------------------------------------------------------
 
+-- | Convert an items of string types to a vector of float values.
+--
+-- TODO(jhibberd) List all fields in items.
+-- TODO(jhibberd) Just don't include mapping for those that can't be 
+-- interpreted.
+-- TODO(jhibberd) Max 5 permutations, so formatter which converts actual value
+-- to a category that appears in the permutation
 toVector :: [String] -> [Float]
-toVector xs = map (\(f, x) -> f x) $ zip converters xs
-    where converters = 
-            [ quantifySurvived
-            , quantifyPclass
-            , quantifyName
-            , quantifySex
-            , quantifyAge
-            , quantifySibsp
-            , quantifyParch
-            , quantifyTicket
-            , quantifyFare
-            , quantifyCabin
-            , quantifyEmbarked
-            ]
+toVector xs = map (\(i, f) -> f (xs !! i)) converters
+    where converters = (permMap 0 ["1", "2", "3"]) ++
+                       [(1, quantifyName)] ++
+                       (permMap 2 ["male", "female"]) ++ 
+                       (permMap 3 ("":(map show [1..80]))) ++
+                       [ (3, quantifyAge)
+                       , (4, quantifySibsp)
+                       , (5, quantifyParch)
+                       , (6, quantifyTicket)
+                       , (7, quantifyFare)
+                       , (8, quantifyCabin)
+                       , (9, quantifyEmbarked)
+                       ]
 
-toVector' :: [String] -> [Float]
-toVector' xs = map (\(f, x) -> f x) $ zip converters xs
-    where converters = 
-            [ quantifyPclass
-            , quantifyName
-            , quantifySex
-            , quantifyAge
-            , quantifySibsp
-            , quantifyParch
-            , quantifyTicket
-            , quantifyFare
-            , quantifyCabin
-            , quantifyEmbarked
-            ]
+permMap :: Int -> [String] -> [(Int, (String -> Float))]
+permMap i m = map (\x -> (i, mapToFloat x)) $ permutations m
 
-quantifySurvived :: String -> Float
-quantifySurvived = read
-
-quantifyPclass :: String -> Float
-quantifyPclass "1" = 1
-quantifyPclass "2" = 2
-quantifyPclass "3" = 3
+mapToFloat :: [String] -> String -> Float
+mapToFloat xs x = case elemIndex x xs of
+                      Just i -> fromIntegral (i+1)
+                      Nothing -> error "Parse error"
 
 -- | Virtually impossible to quantify name into a meaninful number.
 quantifyName :: String -> Float
 quantifyName x = 0
-
-quantifySex :: String -> Float
-quantifySex "male" = 1
-quantifySex "female" = 0
 
 quantifyAge :: String -> Float
 quantifyAge "" = 0
@@ -206,9 +158,26 @@ quantifyFare :: String -> Float
 quantifyFare "" = 0
 quantifyFare x = read x
 
+-- | TODO(jhibberd) Try "dynamic fields" with lists ordered in multiple ways
+
 -- | Ignore for now. See 'quantifyTicket'.
 quantifyCabin :: String -> Float
-quantifyCabin x = 0
+quantifyCabin "" = 0
+quantifyCabin x = letterScore cabin * number tail'
+    where cabin = (words x) !! 0
+          tail' = tail cabin
+          number n 
+              | n == "" = 0
+              | otherwise = read n / 100
+          letterScore c = case (c !! 0) of
+                              'A' -> 1
+                              'B' -> 2
+                              'C' -> 3
+                              'D' -> 4
+                              'E' -> 5
+                              'F' -> 6
+                              'G' -> 7
+                              'T' -> 8
 
 quantifyEmbarked :: String -> Float
 quantifyEmbarked "" = 0
