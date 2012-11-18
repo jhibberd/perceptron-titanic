@@ -1,11 +1,16 @@
 {-
 TODO:
--- Add fareGroup
--- Once all weights have been established pick the strongest n and run again
-   with just those weights. Might avoid overfitting. Does this improve score?
+-- Try another submission.
+-- Still not clear whether we can just drop certain weights with impunity or
+   whether they all somehow depend on one another and by dropping some, the
+   others become invalid.
+-- Try top 25 weights.
+-- Try dynamic columns (children * parents) especially (gender, class and age).
+-- Cleanup, document, include kaggle links and training/test datasets.
 -}
 
 import Text.CSV
+import Text.Printf (printf)
 import Debug.Trace
 import Data.List
 
@@ -13,16 +18,15 @@ import Data.List
 
 trainingFilename =      "/home/jhibberd/projects/learning/titanic/train.csv"
 testFilename =          "/home/jhibberd/projects/learning/titanic/test.csv"
-learningRate =          0.0005
+learningRate =          0.00005
 trainingIterations =    500
+numTopFeatures =        20
 
-
-type Filename = String
 
 main = do
 
     putStrLn "Reading training data from file..."
-    dataset <- readCSV trainingFilename True
+    dataset <- readCSV trainingFilename
     putStrLn ("Read " ++ show (length dataset) ++ " records.")
 
     putStrLn "Extracting desired outputs..."
@@ -41,24 +45,127 @@ main = do
     let weights = initWeights combined
     let (weights', error) = train weights combined' ([], 1) trainingIterations
     putStrLn ("Learnt weights with error " ++ show error ++ ":")
-    pprintWeights weights'
+    pprintWeights weights' vectorLabels
+
+    putStrLn "Identifying strongest correlations..."
+    let bws = bestWeights numTopFeatures weights'
+        bestVectorMatrix = filterByIndices vectorMatrix bws 
+        bestVectorMatrix' = combineVectors bestVectorMatrix
+        bestVectorMatrix'' = zip bestVectorMatrix' outputs
+    pprintTopFeatures bws
 
     putStrLn "Reading test data from file..."
-    testset <- readCSV testFilename True
+    testset <- readCSV testFilename
     putStrLn ("Read " ++ show (length testset) ++ " records.")
 
     -- Quick n dirty
     {-
     let vectorMatrix' = toVectorMatrix testset
-        vectorMatrix'' = combineVectors vectorMatrix'
-    let cs = map (classify weights') vectorMatrix''
+        vectorMatrix'' = filterByIndices vectorMatrix' bws
+        vectorMatrix''' = combineVectors vectorMatrix''
+        weights'' = filterByIndices weights' bws
+
+    let cs = map (classify weights'') vectorMatrix'''
         cs' = map (show . floor) cs
     prependFile testFilename ("survived":cs')
     -}
 
-pprintWeights :: [Float] -> IO ()
-pprintWeights ws = mapM_ f (zip vectorLabels ws)
-    where f (lbl, w) = putStrLn ("\t" ++ lbl ++ "\t" ++ show w)
+
+-- | Transform raw, string-based training rows to binary vectors.
+--
+-- Each value in the binary vector represents whether the row belongs to a 
+-- particular set (0/no, 1/yes).
+toVectorMatrix :: [[String]]    -- String-based dataset to convert
+               -> [[Float]]     -- List of vectors
+toVectorMatrix d = [
+
+    -- Gender
+    toVectors d (\x -> [x!!2]) (\(x:[]) -> b (x == "female")),
+    toVectors d (\x -> [x!!2]) (\(x:[]) -> b (x == "male")),
+
+    -- Class
+    toVectors d (\x -> [x!!0]) (\(x:[]) -> b (x == "1")),
+    toVectors d (\x -> [x!!0]) (\(x:[]) -> b (x == "2")),
+    toVectors d (\x -> [x!!0]) (\(x:[]) -> b (x == "3")),
+   
+    -- Class and gender
+    toVectors d (\x -> [x!!0, x!!2]) (\(c:g:[]) -> b (c == "1" && g == "female")),
+    toVectors d (\x -> [x!!0, x!!2]) (\(c:g:[]) -> b (c == "2" && g == "female")),
+    toVectors d (\x -> [x!!0, x!!2]) (\(c:g:[]) -> b (c == "3" && g == "female")),
+    toVectors d (\x -> [x!!0, x!!2]) (\(c:g:[]) -> b (c == "1" && g == "male")),
+    toVectors d (\x -> [x!!0, x!!2]) (\(c:g:[]) -> b (c == "2" && g == "male")),
+    toVectors d (\x -> [x!!0, x!!2]) (\(c:g:[]) -> b (c == "3" && g == "male")),
+
+    -- Age
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 1)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 2)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 3)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 4)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 5)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 6)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 7)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 8)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 9)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 10)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 11)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 12)),
+    toVectors d (\x -> [x!!3]) (\(x:[]) -> b ((ageGroup x) == 13)),
+
+    -- Embarked
+    toVectors d (\x -> [x!!9]) (\(x:[]) -> b (x == "C")),
+    toVectors d (\x -> [x!!9]) (\(x:[]) -> b (x == "Q")),
+    toVectors d (\x -> [x!!9]) (\(x:[]) -> b (x == "S")),
+
+    -- Cabin group
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 1)),
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 2)),
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 3)),
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 4)),
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 5)),
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 6)),
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 7)),
+    toVectors d (\x -> [x!!8]) (\(x:[]) -> b ((cabinGroup x) == 8)),
+
+    -- Siblings
+    toVectors d (\x -> [x!!4]) (\(x:[]) -> b ((siblingGroup x) == 1)),
+    toVectors d (\x -> [x!!4]) (\(x:[]) -> b ((siblingGroup x) == 2)),
+    toVectors d (\x -> [x!!4]) (\(x:[]) -> b ((siblingGroup x) == 3)),
+    toVectors d (\x -> [x!!4]) (\(x:[]) -> b ((siblingGroup x) == 4)),
+    toVectors d (\x -> [x!!4]) (\(x:[]) -> b ((siblingGroup x) == 5)),
+
+    -- Parents
+    toVectors d (\x -> [x!!5]) (\(x:[]) -> b (x == "0")),
+    toVectors d (\x -> [x!!5]) (\(x:[]) -> b (x == "1")),
+    toVectors d (\x -> [x!!5]) (\(x:[]) -> b (x == "2")),
+    toVectors d (\x -> [x!!5]) (\(x:[]) -> b (x == "3")),
+    toVectors d (\x -> [x!!5]) (\(x:[]) -> b (x == "4")),
+
+    -- Fare
+    toVectors d (\x -> [x!!7]) (\(x:[]) -> b ((fareGroup x) == 1)),
+    toVectors d (\x -> [x!!7]) (\(x:[]) -> b ((fareGroup x) == 2)),
+    toVectors d (\x -> [x!!7]) (\(x:[]) -> b ((fareGroup x) == 3)),
+    toVectors d (\x -> [x!!7]) (\(x:[]) -> b ((fareGroup x) == 4)),
+    toVectors d (\x -> [x!!7]) (\(x:[]) -> b ((fareGroup x) == 5))
+
+    ]
+    where b True =  1
+          b False = 0
+
+
+-- Log -------------------------------------------------------------------------
+
+-- | Pretty print the top features.
+pprintTopFeatures :: [Int]  -- Index positions of top weights
+                  -> IO ()
+pprintTopFeatures is = mapM_ f (filterByIndices vectorLabels is)
+    where f lbl = putStrLn ("\t" ++ lbl)
+
+-- | Pretty print a list of features and their respective learnt weights. 
+pprintWeights :: [Float]    -- Weights
+              -> [String]   -- Labels
+              -> IO ()
+pprintWeights ws lbls = mapM_ f (zip lbls ws)
+    where f (lbl, w) = putStrLn ("\t" ++ lbl ++ "\t" ++ printf "%+.6f" w)
 
 -- | Human friendly labels explaining what each vector represents.
 --
@@ -70,13 +177,27 @@ vectorLabels = [
     "Is first class.............",
     "Is second class............",
     "Is third class.............",
-    "Is aged <18................",
-    "Is aged 18-29..............",
-    "Is aged 30-39..............",
-    "Is aged 40-49..............",
-    "Is aged 50+................",
-    "Did embark at 'C'..........",
-    "Did embark at 'Q'..........",
+    "Is first class and female..",
+    "Is second class and female.",
+    "Is third class and female..",
+    "Is first class and male....",
+    "Is second class and male...",
+    "Is third class and male....",
+    "Is aged <5.................",
+    "Is aged 5-9................",
+    "Is aged 10-14..............",
+    "Is aged 15-19..............",
+    "Is aged 20-24..............",
+    "Is aged 25-29..............",
+    "Is aged 30-34..............",
+    "Is aged 35-39..............",
+    "Is aged 40-44..............",
+    "Is aged 45-49..............",
+    "Is aged 50-54..............",
+    "Is aged 55-59..............",
+    "Is aged 60+................",
+    "Did embark at Cherbourg....",
+    "Did embark at Queenstown...",
     "Did embark at Southampton..",
     "In cabin tier A............",
     "In cabin tier B............",
@@ -85,7 +206,7 @@ vectorLabels = [
     "In cabin tier E............",
     "In cabin tier F............",
     "In cabin tier G............",
-    "In cabin tier H............"
+    "In cabin tier H............",
     "Has no siblings............",
     "Has 1 sibling..............",
     "Has 2 siblings.............",
@@ -95,65 +216,13 @@ vectorLabels = [
     "Has 1 parent...............",
     "Has 2 parents..............",
     "Has 3 parents..............",
-    "Has 4 parents.............."
+    "Has 4 parents..............",
+    "Fare is < 25...............",
+    "Fare is < 50...............",
+    "Fare is < 75...............",
+    "Fare is < 100..............",
+    "Fare is 100+..............."
     ]
-
--- | Transform raw, string-based training rows to binary vectors.
---
--- Each value in the binary vector represents whether the row belongs to a 
--- particular set (0/no, 1/yes).
-toVectorMatrix :: [[String]]    -- String-based dataset to convert
-               -> [[Float]]     -- List of vectors
-toVectorMatrix d = [
-
-    -- Gender
-    toVectors d 2 (\x -> b (x == "female")),
-    toVectors d 2 (\x -> b (x == "male")),
-
-    -- Class
-    toVectors d 0 (\x -> b (x == "1")),
-    toVectors d 0 (\x -> b (x == "2")),
-    toVectors d 0 (\x -> b (x == "3")),
-    
-    -- Age
-    toVectors d 3 (\x -> b ((ageGroup x) == 1)),
-    toVectors d 3 (\x -> b ((ageGroup x) == 2)),
-    toVectors d 3 (\x -> b ((ageGroup x) == 3)),
-    toVectors d 3 (\x -> b ((ageGroup x) == 4)),
-    toVectors d 3 (\x -> b ((ageGroup x) == 5)),
-
-    -- Embarked
-    toVectors d 9 (\x -> b (x == "C")),
-    toVectors d 9 (\x -> b (x == "Q")),
-    toVectors d 9 (\x -> b (x == "S")),
-
-    -- Cabin group
-    toVectors d 8 (\x -> b ((cabinGroup x) == 1)),
-    toVectors d 8 (\x -> b ((cabinGroup x) == 2)),
-    toVectors d 8 (\x -> b ((cabinGroup x) == 3)),
-    toVectors d 8 (\x -> b ((cabinGroup x) == 4)),
-    toVectors d 8 (\x -> b ((cabinGroup x) == 5)),
-    toVectors d 8 (\x -> b ((cabinGroup x) == 6)),
-    toVectors d 8 (\x -> b ((cabinGroup x) == 7)),
-    toVectors d 8 (\x -> b ((cabinGroup x) == 8))
-
-    -- Siblings
-    toVectors d 4 (\x -> b ((siblingGroup x) == 1)),
-    toVectors d 4 (\x -> b ((siblingGroup x) == 2)),
-    toVectors d 4 (\x -> b ((siblingGroup x) == 3)),
-    toVectors d 4 (\x -> b ((siblingGroup x) == 4)),
-    toVectors d 4 (\x -> b ((siblingGroup x) == 5)),
-
-    -- Parents
-    toVectors d 5 (\x -> b (x == "0")),
-    toVectors d 5 (\x -> b (x == "1")),
-    toVectors d 5 (\x -> b (x == "2")),
-    toVectors d 5 (\x -> b (x == "3")),
-    toVectors d 5 (\x -> b (x == "4"))
-
-    ]
-    where b True =  1
-          b False = 0
 
 
 -- Vector transformations ------------------------------------------------------
@@ -170,11 +239,19 @@ ageGroup :: String -> Float
 ageGroup "" = 0
 ageGroup x = group $ (read x :: Float)
     where group n
-              | n < 18 = 1
-              | n < 30 = 2
-              | n < 40 = 3
-              | n < 50 = 4
-              | otherwise = 5
+              | n < 5 =     1
+              | n < 10 =    2
+              | n < 15 =    3
+              | n < 20 =    4
+              | n < 25 =    5
+              | n < 30 =    6
+              | n < 35 =    7
+              | n < 40 =    8
+              | n < 45 =    9
+              | n < 50 =    10
+              | n < 55 =    11
+              | n < 60 =    12
+              | otherwise = 13
 
 cabinGroup :: String -> Float
 cabinGroup "" = 0
@@ -190,8 +267,38 @@ cabinGroup x = letterScore cabin
                               'G' -> 7
                               'T' -> 8
 
+fareGroup :: String -> Float
+fareGroup "" = 0
+fareGroup x
+    | x' < 25.0 =   1
+    | x' < 50.0 =   2
+    | x' < 75.0 =   3
+    | x' < 100.0 =  4
+    | otherwise =   5
+    where x' = read x
+
 
 -- Helpers ---------------------------------------------------------------------
+
+-- | Return only elements from a list whose indices are present in a second
+-- list.
+filterByIndices :: [a]      -- All available vector matrices.
+                -> [Int]    -- List of indices to filter by.
+                -> [a]      -- Filtered vector matrices.
+filterByIndices xs is = map snd filtered
+    where indexed = zip [0..] xs
+          filtered = filter (\x -> (fst x) `elem` is) indexed
+
+-- | Given a list of weights return the index positions of the highest weights
+-- in absolute terms.
+bestWeights :: Int      -- Number of top weights to return
+            -> [Float]  -- List of weights from which best are chosen
+            -> [Int]    -- Index positions of top weights
+bestWeights n ws = take n indexOnly
+    where absolute = map abs ws
+          indexed = zip [0..] absolute
+          sorted = reverse $ sortBy (\x y -> compare (snd x) (snd y)) indexed
+          indexOnly = map fst sorted
 
 -- | Combines multiple vector lists.
 --
@@ -220,39 +327,35 @@ removeOutputs = map tail
 -- | Convert a list of raw string CSV values to a list of vectors
 --
 -- [["a", "b", "c"], ["d", "e", "f"], ...] => [[1], [2]]
-toVectors :: [[String]]         -- Raw dataset
-          -> Int                -- Index of column to convert to vector
-          -> (String -> Float)  -- Function to convert raw value to vector float.
+toVectors :: [[String]]                 -- Raw dataset
+          -> ([String] -> [String])     -- Function to extract desired columns
+                                        -- from a raw row.
+          -> ([String] -> Float)        -- Function to convert a list of raw
+                                        -- row columns to a single feature.
           -> [Float]
-toVectors ds i f = map f onlyCol 
-    where onlyCol = map (!!i) ds
+toVectors ds extract toFeature = map (toFeature . extract) ds
 
 -- | Read the contents of a CSV file as a list of lists.
 --
--- If 'headless' is set to true then the first line containing the column
--- names is ignored. Any trailing empty line is ignored.
-readCSV :: Filename 
-        -> Bool 
+-- Any trailing empty line is ignored.
+readCSV :: String   -- File path 
         -> IO [[String]]
-readCSV fn headless = do
+readCSV fn = do
     content <- parseCSVFromFile fn
     case content of
         (Left a) -> error ""
-        (Right a) -> let a' = removeBlankLines a in
-                     return $ if headless then tail a' else a'
+        (Right a) -> return . tail $ removeBlankLines a
     where removeBlankLines = filter (/= [""])
 
-prependFile :: FilePath 
-            -> [String] 
+-- | Prepend the rows of a file with elements from a list.
+prependFile :: String       -- File path 
+            -> [String]     -- Elements to prepend
             -> IO ()
 prependFile fn xs = do
     content <- readFile fn
     let content' = lines content
-    let result = map (\(x, y) -> x ++ "," ++ y) $ zip xs content'
+        result = map (\(x, y) -> x ++ "," ++ y) $ zip xs content'
     mapM_ putStrLn result
-
-type Sample = ([Float], Float)
-type TrainingSet = [Sample]
 
 
 -- Perceptron algorithm --------------------------------------------------------
@@ -263,14 +366,14 @@ initWeights :: [[Float]]    -- All input vectors
                             -- to input vectors
 initWeights (x:_) = take (length x) $ repeat 0.0
 
--- | May not produce the best outcome. Maybe pick lowest error score after
--- n iterations?
-train :: [Float]            -- Initial or current weights 
-      -> TrainingSet 
-      -> ([Float], Float)   -- Best error score achieved and corresponding 
-                            -- weights
-      -> Float              -- Iterations remaining
-      -> ([Float], Float)   -- Return best weights and error
+-- | Learn a list of weights by repeatedly iterating over a training dataset.
+-- The most successful weights are returned after n iterations.
+train :: [Float]                -- Initial or current weights 
+      -> [([Float], Float) ]    -- Training set
+      -> ([Float], Float)       -- Best error score achieved and corresponding 
+                                -- weights
+      -> Float                  -- Iterations remaining
+      -> ([Float], Float)       -- Return best weights and error
 train _ _ (bWeights, bError) 0 = (bWeights, bError)
 train ws xs (bWeights, bError) n = 
 
@@ -284,9 +387,11 @@ train ws xs (bWeights, bError) n =
     in train ws' xs newBest (n-1)
     where numTrainingVectors = fromIntegral $ length xs
 
-
-iterate' :: [Float] 
-         -> TrainingSet 
+-- | With a starting list of weights, iterate through the training dataset
+-- and adjust the weights by applying the perceptron algorithm whenever items
+-- are misclassified.
+iterate' :: [Float]             -- Current or initial weights
+         -> [([Float], Float)]  -- Training set
          -> Float               -- Error 
          -> ([Float], Float)    -- Weights and error
 iterate' ws [] e = (ws, e)
