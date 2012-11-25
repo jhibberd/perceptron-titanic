@@ -1,6 +1,6 @@
 {-
 TODO:
--- Try another submission.
+-- Try with compound features but drop all except age, class, gender and fare.
 -- Still not clear whether we can just drop certain weights with impunity or
    whether they all somehow depend on one another and by dropping some, the
    others become invalid.
@@ -69,7 +69,6 @@ main = do
         cs' = map (show . floor) cs
     prependFile testFilename ("survived":cs')
     -}
-
 
 -- | Transform raw, string-based training rows to binary vectors.
 --

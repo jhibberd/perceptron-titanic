@@ -1,7 +1,7 @@
 from collections import defaultdict
 
-result = defaultdict(int)
 
+result = []
 parsed_header = False
 with open("/home/jhibberd/projects/learning/titanic/train.csv") as f:
     for ln in f.readlines():
@@ -16,11 +16,9 @@ with open("/home/jhibberd/projects/learning/titanic/train.csv") as f:
 
         ln = ln.split(",")
 
-        survived = bool(int(ln[0]))
-        is_male = "male" in ln
+        result.append(float(ln[-3]))
 
-        result[(survived, is_male)] += 1
-
+result.sort()
 print result
 
 """
